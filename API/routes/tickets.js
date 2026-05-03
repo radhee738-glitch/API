@@ -26,9 +26,14 @@ router.post('/request', authenticate, authorize('customer'), async (req, res) =>
       return res.status(404).json({ error: 'Customer not found' });
     }
 
-    await db.query('UPDATE counters SET current_ticket = current_ticket + 1 WHERE id = $1', [counterId]);
-    const counter = await db.query('SELECT current_ticket FROM counters WHERE id = $1', [counterId]);
-    const nextTicket = counter.rows[0].current_ticket;
+    const counterResult = await db.query(
+      'UPDATE counters SET current_ticket = current_ticket + 1 WHERE id = $1 RETURNING current_ticket',
+      [counterId]
+    );
+    if (!counterResult.rows[0]) {
+      return res.status(404).json({ error: 'Counter not found' });
+    }
+    const nextTicket = counterResult.rows[0].current_ticket;
 
     const ticket = await db.query(
       'INSERT INTO tickets (counter_id, customer_id, ticket_number) VALUES ($1, $2, $3) RETURNING *',

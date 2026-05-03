@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getDashboard,
-  getLoans,
+  getAllLoans,
   getCounters,
   getSecurityStaff,
   getAdminUsers,
@@ -24,7 +24,7 @@ const sectionLabels = [
 ];
 
 const AdminPage = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [activeSection, setActiveSection] = useState('overview');
   const [dashboard, setDashboard] = useState(null);
   const [loans, setLoans] = useState([]);
@@ -42,17 +42,17 @@ const AdminPage = () => {
   const [staffSearch, setStaffSearch] = useState('');
   const [staffPage, setStaffPage] = useState(1);
   const [staffTotal, setStaffTotal] = useState(0);
-  const [staffForm, setStaffForm] = useState({ name: '', email: '', password: '', role: '' });
+  const [staffForm, setStaffForm] = useState({ name: '', cnic: '', phone: '', shift: '', notes: '' });
   const [editingStaff, setEditingStaff] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = null;
+  const [error, setError] = useState(null);
 
   const userLimit = 8;
   const transactionLimit = 8;
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([getDashboard(), getLoans(), getCounters(), getSecurityStaff()])
+    Promise.all([getDashboard(), getAllLoans(), getCounters(), getSecurityStaff()])
       .then(([dashboardRes, loansRes, countersRes, securityRes]) => {
         setDashboard(dashboardRes.data);
         setLoans(loansRes.data.loans || []);
@@ -158,7 +158,7 @@ const AdminPage = () => {
       } else {
         setSecurity((current) => [...current, response.data.staff]);
       }
-      setStaffForm({ name: '', email: '', password: '', role: '' });
+      setStaffForm({ name: '', cnic: '', phone: '', shift: '', notes: '' });
     } catch (err) {
       setError(err.response?.data?.error || 'Unable to save staff');
     }
@@ -166,7 +166,7 @@ const AdminPage = () => {
 
   const handleEditStaff = (staff) => {
     setEditingStaff(staff);
-    setStaffForm({ name: staff.name, email: staff.email, password: '', role: staff.role });
+    setStaffForm({ name: staff.name, cnic: staff.cnic || '', phone: staff.phone || '', shift: staff.shift || '', notes: staff.notes || '' });
   };
 
   const handleDeleteStaff = async (staffId) => {
@@ -415,9 +415,10 @@ const AdminPage = () => {
                   <thead>
                     <tr>
                       <th>Name</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Created</th>
+                      <th>CNIC</th>
+                      <th>Phone</th>
+                      <th>Shift</th>
+                      <th>Notes</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -425,9 +426,10 @@ const AdminPage = () => {
                     {security.map((staff) => (
                       <tr key={staff.id}>
                         <td>{staff.name}</td>
-                        <td>{staff.email}</td>
-                        <td>{staff.role}</td>
-                        <td>{new Date(staff.created_at).toLocaleDateString()}</td>
+                        <td>{staff.cnic}</td>
+                        <td>{staff.phone || '-'}</td>
+                        <td>{staff.shift || '-'}</td>
+                        <td>{staff.notes || '-'}</td>
                         <td>
                           <button
                             type="button"
@@ -480,21 +482,25 @@ const AdminPage = () => {
                 <input name="name" value={staffForm.name} onChange={handleStaffChange} required />
               </label>
               <label>
-                Email
-                <input name="email" type="email" value={staffForm.email} onChange={handleStaffChange} required />
+                CNIC
+                <input name="cnic" value={staffForm.cnic} onChange={handleStaffChange} required />
               </label>
               <label>
-                Password
-                <input name="password" type="password" value={staffForm.password} onChange={handleStaffChange} required={!editingStaff} />
+                Phone
+                <input name="phone" value={staffForm.phone} onChange={handleStaffChange} />
               </label>
               <label>
-                Role
-                <select name="role" value={staffForm.role} onChange={handleStaffChange} required>
-                  <option value="">Select role</option>
-                  <option value="security">Security</option>
-                  <option value="supervisor">Supervisor</option>
-                  <option value="manager">Manager</option>
+                Shift
+                <select name="shift" value={staffForm.shift} onChange={handleStaffChange}>
+                  <option value="">Select shift</option>
+                  <option value="Day">Day</option>
+                  <option value="Night">Night</option>
+                  <option value="Rotating">Rotating</option>
                 </select>
+              </label>
+              <label>
+                Notes
+                <textarea name="notes" value={staffForm.notes} onChange={handleStaffChange} placeholder="Additional notes" />
               </label>
               <div>
                 <button type="submit" className="primary">
@@ -506,7 +512,7 @@ const AdminPage = () => {
                     className="secondary"
                     onClick={() => {
                       setEditingStaff(null);
-                      setStaffForm({ name: '', email: '', password: '', role: '' });
+                      setStaffForm({ name: '', cnic: '', phone: '', shift: '', notes: '' });
                     }}
                   >
                     Cancel
@@ -597,11 +603,6 @@ const AdminPage = () => {
         <div>
           <h1 className="page-title">Admin Portal</h1>
           <p className="text-muted">Use the sidebar to view users, transactions, and system data.</p>
-        </div>
-        <div className="nav-links">
-          <button type="button" className="secondary" onClick={logout}>
-            Sign out
-          </button>
         </div>
       </div>
 

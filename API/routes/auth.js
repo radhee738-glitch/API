@@ -28,10 +28,16 @@ const storeSession = async (userId, token, jti, expiresAt) => {
 };
 
 router.post('/register', async (req, res) => {
-  const { name, email, password, role = 'customer', cnic, phone, address, dob } = req.body;
+  const { name, email, password, cnic, phone, address, dob } = req.body;
+  // Role is always 'customer' for public registration — admin creates staff via admin routes
+  const role = 'customer';
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required' });
+  }
+
+  if (!cnic) {
+    return res.status(400).json({ error: 'CNIC is required for customer registration' });
   }
 
   try {
@@ -71,11 +77,15 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const result = await db.query('SELECT id, name, email, password_hash, role FROM users WHERE email = $1', [email]);
+    const result = await db.query('SELECT id, name, email, password_hash, role, banned FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (user.banned) {
+      return res.status(403).json({ error: 'Your account has been banned. Contact support for assistance.' });
     }
 
     const isValid = await bcrypt.compare(password, user.password_hash);

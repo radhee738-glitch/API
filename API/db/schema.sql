@@ -1,6 +1,6 @@
 -- Banking system schema
 
-DROP TABLE IF EXISTS tickets, transactions, loans, accounts, customers, security_staff, audit_logs, counters, users CASCADE;
+DROP TABLE IF EXISTS tickets, transactions, loans, accounts, customers, security_staff, audit_logs, counters, users, sessions, otp_codes CASCADE;
 
 CREATE TABLE users (
   id SERIAL PRIMARY KEY,
@@ -61,6 +61,7 @@ CREATE TABLE loans (
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   account_id INTEGER REFERENCES accounts(id),
   amount NUMERIC(18,2) NOT NULL,
+  purpose TEXT,
   term_months INTEGER NOT NULL,
   interest_rate NUMERIC(5,2) NOT NULL DEFAULT 12.0,
   status TEXT NOT NULL DEFAULT 'pending',
@@ -95,6 +96,16 @@ CREATE TABLE sessions (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token TEXT NOT NULL,
   jti TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE otp_codes (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'transaction',
+  used BOOLEAN NOT NULL DEFAULT FALSE,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

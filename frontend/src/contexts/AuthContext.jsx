@@ -56,7 +56,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await import('../services/api').then(m => m.default.post('/auth/logout'));
+    } catch (err) {
+      // Ignore errors — we still clear local state
+    }
     setUser(null);
     setToken(null);
     localStorage.removeItem('banking_token');

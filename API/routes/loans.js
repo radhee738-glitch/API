@@ -71,5 +71,38 @@ router.get('/mine', authenticate, authorize('customer'), async (req, res) => {
     return res.status(500).json({ error: 'Unable to fetch loans', details: error.message });
   }
 });
+router.put('/approve/:loanId', authenticate, authorize('admin', 'teller'), async (req, res) => {
+  const { loanId } = req.params;
+  try {
+    const result = await db.query(
+      'UPDATE loans SET status = $1, approved_at = NOW() WHERE id = $2 AND status = $3 RETURNING *',
+      ['approved', loanId, 'pending']
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Loan not found or already processed' });
+    }
+    req.audit.action = 'loan.approve';
+    req.audit.details = JSON.stringify({ loanId, userId: req.user.id });
+    return res.json({ loan: result.rows[0] });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to approve loan', details: error.message });
+  }
+});
+
+router.get('/all', authenticate, authorize('admin', 'teller'), async (req, res) => {
+  try {
+    const loans = await db.query(
+      `SELECT l.*, u.name AS customer_name, a.account_number
+       FROM loans l
+       JOIN customers c ON l.customer_id = c.id
+       JOIN users u ON c.user_id = u.id
+       LEFT JOIN accounts a ON l.account_id = a.id
+       ORDER BY l.created_at DESC`
+    );
+    return res.json({ loans: loans.rows });
+  } catch (error) {
+    return res.status(500).json({ error: 'Unable to fetch loans', details: error.message });
+  }
+});
 
 module.exports = router;

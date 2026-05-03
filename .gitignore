@@ -1,3 +1,6 @@
 API/node_modules/
 API/.env
 API/*.log
+frontend/node_modules/
+frontend/dist/
+frontend/.env

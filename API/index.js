@@ -10,6 +10,7 @@ const ticketRoutes = require('./routes/tickets');
 const securityRoutes = require('./routes/security');
 const adminRoutes = require('./routes/admin');
 const profileRoutes = require('./routes/profile');
+const otpRoutes = require('./routes/otp');
 const swaggerUi = require('swagger-ui-express');
 const { audit } = require('./middleware/auth');
 const swaggerSpec = require('./swagger');
@@ -43,6 +44,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/otp', otpRoutes);
 
 app.get('/', (req, res) => {
   return res.json({ service: 'banking-api', status: 'ready' });

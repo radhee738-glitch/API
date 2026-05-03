@@ -77,6 +77,14 @@ const createSampleLoan = async (customerId, accountId, amount, termMonths, inter
 
 (async () => {
   try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    console.log('Rebuilding database schema...');
+    const schemaSql = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf-8');
+    await db.query(schemaSql);
+    console.log('Schema rebuilt successfully.');
+
     const adminExisting = await db.query('SELECT id FROM users WHERE email = $1', [ADMIN_EMAIL]);
     if (adminExisting.rows.length > 0) {
       const admin = adminExisting.rows[0];
@@ -186,7 +194,7 @@ const createSampleLoan = async (customerId, accountId, amount, termMonths, inter
     console.log('Admin seed completed successfully.');
     process.exit(0);
   } catch (error) {
-    console.error('Admin seed failed:', error.message);
+    console.error('Admin seed failed:', error);
     process.exit(1);
   }
 })();
