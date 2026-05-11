@@ -3,7 +3,6 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getDashboard,
   getAllLoans,
-  getCounters,
   getSecurityStaff,
   getAdminUsers,
   getAdminTransactions,
@@ -19,7 +18,6 @@ const sectionLabels = [
   { id: 'overview', label: 'Overview' },
   { id: 'users', label: 'Users' },
   { id: 'transactions', label: 'Transactions' },
-  { id: 'counters', label: 'Counters' },
   { id: 'staff', label: 'Security Staff' }
 ];
 
@@ -28,7 +26,6 @@ const AdminPage = () => {
   const [activeSection, setActiveSection] = useState('overview');
   const [dashboard, setDashboard] = useState(null);
   const [loans, setLoans] = useState([]);
-  const [counters, setCounters] = useState([]);
   const [security, setSecurity] = useState([]);
   const [users, setUsers] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -52,11 +49,10 @@ const AdminPage = () => {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([getDashboard(), getAllLoans(), getCounters(), getSecurityStaff()])
-      .then(([dashboardRes, loansRes, countersRes, securityRes]) => {
+    Promise.all([getDashboard(), getAllLoans(), getSecurityStaff()])
+      .then(([dashboardRes, loansRes, securityRes]) => {
         setDashboard(dashboardRes.data);
         setLoans(loansRes.data.loans || []);
-        setCounters(countersRes.data.counters || []);
         setSecurity(securityRes.data.staff || []);
       })
       .catch((err) => setError(err.response?.data?.error || 'Unable to load admin data'))
@@ -367,24 +363,7 @@ const AdminPage = () => {
       );
     }
 
-    if (activeSection === 'counters') {
-      return (
-        <div className="card">
-          <h2 className="page-title">Counters</h2>
-          {counters.length === 0 ? (
-            <p>No counters configured.</p>
-          ) : (
-            <ul>
-              {counters.map((counter) => (
-                <li key={counter.id}>
-                  {counter.name} – {counter.status} (ticket {counter.current_ticket})
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      );
-    }
+
 
     if (activeSection === 'staff') {
       const totalStaffPages = Math.max(1, Math.ceil(staffTotal / userLimit));
@@ -544,10 +523,7 @@ const AdminPage = () => {
             <strong>Loans</strong>
             <p>{dashboard?.loans ?? '—'}</p>
           </div>
-          <div className="metric-card">
-            <strong>Tickets</strong>
-            <p>{dashboard?.tickets ?? '—'}</p>
-          </div>
+
           <div className="metric-card">
             <strong>Security staff</strong>
             <p>{dashboard?.securityStaff ?? '—'}</p>
@@ -575,7 +551,7 @@ const AdminPage = () => {
                 {loans.map((loan) => (
                   <tr key={loan.id}>
                     <td>{loan.id}</td>
-                    <td>{loan.account_id ?? '-'}</td>
+                    <td>{loan.account_number ?? '-'}</td>
                     <td>{loan.amount}</td>
                     <td>{loan.status}</td>
                     <td>
@@ -595,7 +571,7 @@ const AdminPage = () => {
         </div>
       </div>
     );
-  }, [activeSection, counters, dashboard, loans, security, staffForm, transactionPage, transactionSearch, transactionType, transactions, userPage, userSearch, users, totalTransactionPages, totalUserPages]);
+  }, [activeSection, dashboard, loans, security, staffForm, transactionPage, transactionSearch, transactionType, transactions, userPage, userSearch, users, totalTransactionPages, totalUserPages, staffSearch, staffPage, staffTotal, editingStaff, error]);
 
   return (
     <div className="page-container admin-shell">

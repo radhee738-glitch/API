@@ -21,10 +21,9 @@ const signToken = (user, jti) => {
 };
 
 const storeSession = async (userId, token, jti, expiresAt) => {
-  await db.query(
-    'INSERT INTO sessions (user_id, token, jti, expires_at) VALUES ($1, $2, $3, $4)',
-    [userId, token, jti, expiresAt]
-  );
+  await db.session.create({
+    data: { user_id: userId, token, jti, expires_at: expiresAt }
+  });
 };
 
 router.post('/register', async (req, res) => {
@@ -42,18 +41,38 @@ router.post('/register', async (req, res) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, 12);
-    const insertUser = await db.query(
-      'INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role',
-      [name, email, hashedPassword, role]
-    );
-
-    const user = insertUser.rows[0];
-
+    let user;
     if (role === 'customer') {
-      await db.query(
-        'INSERT INTO customers (user_id, cnic, phone, address, dob) VALUES ($1, $2, $3, $4, $5)',
-        [user.id, cnic, phone, address, dob]
-      );
+      user = await db.user.create({
+        data: {
+          name, email, password_hash: hashedPassword, role,
+          customers: {
+            create: { cnic, phone, address, dob: dob ? new Date(dob) : null }
+          }
+        },
+        include: { customers: true }
+      });
+
+      // Auto-create a default savings account for the new customer
+      const customer = user.customers[0];
+      const accountNumber = `AC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
+      await db.account.create({
+        data: {
+          account_number: accountNumber,
+          customer_id: customer.id,
+          type: 'savings',
+          balance: 0,
+          currency: 'PKR'
+        }
+      });
+
+      // Clean up user object for response
+      user = { id: user.id, name: user.name, email: user.email, role: user.role };
+    } else {
+      user = await db.user.create({
+        data: { name, email, password_hash: hashedPassword, role },
+        select: { id: true, name: true, email: true, role: true }
+      });
     }
 
     const jti = crypto.randomUUID();
@@ -63,7 +82,7 @@ router.post('/register', async (req, res) => {
 
     return res.status(201).json({ user, token });
   } catch (error) {
-    if (error.code === '23505') {
+    if (error.code === 'P2002') {
       return res.status(409).json({ error: 'Email or CNIC already exists' });
     }
     return res.status(500).json({ error: 'Unable to register user', details: error.message });
@@ -77,8 +96,9 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const result = await db.query('SELECT id, name, email, password_hash, role, banned FROM users WHERE email = $1', [email]);
-    const user = result.rows[0];
+    const user = await db.user.findUnique({
+      where: { email }
+    });
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -96,6 +116,12 @@ router.post('/login', async (req, res) => {
     const jti = crypto.randomUUID();
     const token = signToken(user, jti);
     const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+
+    // Clean up expired sessions for this user
+    await db.session.deleteMany({
+      where: { user_id: user.id, expires_at: { lt: new Date() } }
+    });
+
     await storeSession(user.id, token, jti, expiresAt);
 
     return res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role }, token });
@@ -106,7 +132,9 @@ router.post('/login', async (req, res) => {
 
 router.post('/logout', authenticate, async (req, res) => {
   try {
-    await db.query('DELETE FROM sessions WHERE jti = $1 AND user_id = $2', [req.user.jti, req.user.id]);
+    await db.session.deleteMany({
+      where: { jti: req.user.jti, user_id: req.user.id }
+    });
     return res.json({ message: 'Logged out successfully' });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to logout', details: error.message });

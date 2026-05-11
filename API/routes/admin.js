@@ -7,23 +7,15 @@ const router = express.Router();
 
 router.get('/dashboard', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const [customerCount, accountCount, transactionCount, loanCount, ticketCount, securityCount] = await Promise.all([
-      db.query('SELECT COUNT(*) FROM customers'),
-      db.query('SELECT COUNT(*) FROM accounts'),
-      db.query('SELECT COUNT(*) FROM transactions'),
-      db.query('SELECT COUNT(*) FROM loans'),
-      db.query('SELECT COUNT(*) FROM tickets'),
-      db.query('SELECT COUNT(*) FROM security_staff')
+    const [customers, accounts, transactions, loans, securityStaff] = await Promise.all([
+      db.customer.count(),
+      db.account.count(),
+      db.transaction.count(),
+      db.loan.count(),
+      db.securityStaff.count()
     ]);
 
-    return res.json({
-      customers: parseInt(customerCount.rows[0].count, 10),
-      accounts: parseInt(accountCount.rows[0].count, 10),
-      transactions: parseInt(transactionCount.rows[0].count, 10),
-      loans: parseInt(loanCount.rows[0].count, 10),
-      tickets: parseInt(ticketCount.rows[0].count, 10),
-      securityStaff: parseInt(securityCount.rows[0].count, 10)
-    });
+    return res.json({ customers, accounts, transactions, loans, securityStaff });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to load dashboard data', details: error.message });
   }
@@ -37,36 +29,34 @@ router.get('/users', authenticate, authorize('admin'), async (req, res) => {
     const role = req.query.role || '';
     const offset = (page - 1) * limit;
 
-    const conditions = ['1=1'];
-    const params = [];
-
+    const where = {};
     if (search) {
-      params.push(`%${search}%`);
-      conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length} OR c.cnic ILIKE $${params.length})`);
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { customers: { some: { cnic: { contains: search, mode: 'insensitive' } } } }
+      ];
     }
     if (role) {
-      params.push(role);
-      conditions.push(`u.role = $${params.length}`);
+      where.role = role;
     }
 
-    const countResult = await db.query(
-      `SELECT COUNT(*) FROM users u LEFT JOIN customers c ON u.id = c.user_id WHERE ${conditions.join(' AND ')}`,
-      params
-    );
-    const total = parseInt(countResult.rows[0].count, 10);
+    const total = await db.user.count({ where });
+    const userRecords = await db.user.findMany({
+      where,
+      include: { customers: true },
+      orderBy: { created_at: 'desc' },
+      skip: offset,
+      take: limit
+    });
 
-    params.push(limit, offset);
-    const users = await db.query(
-      `SELECT u.id, u.name, u.email, u.role, u.created_at, u.banned, u.ban_reason, c.cnic, c.phone, c.status
-       FROM users u
-       LEFT JOIN customers c ON u.id = c.user_id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY u.created_at DESC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params
-    );
+    const users = userRecords.map(u => {
+      const customer = u.customers[0] || {};
+      const { customers, password_hash, ...rest } = u;
+      return { ...rest, cnic: customer.cnic || null, phone: customer.phone || null, status: customer.status || null };
+    });
 
-    return res.json({ users: users.rows, total });
+    return res.json({ users, total });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to fetch user list', details: error.message });
   }
@@ -80,46 +70,39 @@ router.get('/transactions', authenticate, authorize('admin'), async (req, res) =
     const type = req.query.type || '';
     const offset = (page - 1) * limit;
 
-    const conditions = ['1=1'];
-    const params = [];
-
+    const where = {};
     if (search) {
-      params.push(`%${search}%`);
-      conditions.push(
-        `(a.account_number ILIKE $${params.length} OR u.name ILIKE $${params.length} OR t.description ILIKE $${params.length})`
-      );
+      where.OR = [
+        { account: { account_number: { contains: search, mode: 'insensitive' } } },
+        { account: { customer: { user: { name: { contains: search, mode: 'insensitive' } } } } },
+        { description: { contains: search, mode: 'insensitive' } }
+      ];
     }
     if (type) {
-      params.push(type);
-      conditions.push(`t.type = $${params.length}`);
+      where.type = type;
     }
 
-    const countResult = await db.query(
-      `SELECT COUNT(*)
-       FROM transactions t
-       JOIN accounts a ON t.account_id = a.id
-       JOIN customers c ON a.customer_id = c.id
-       JOIN users u ON c.user_id = u.id
-       WHERE ${conditions.join(' AND ')}`,
-      params
-    );
-    const total = parseInt(countResult.rows[0].count, 10);
+    const total = await db.transaction.count({ where });
+    const transactionRecords = await db.transaction.findMany({
+      where,
+      include: {
+        account: {
+          include: { customer: { include: { user: { select: { name: true } } } } }
+        }
+      },
+      orderBy: { created_at: 'desc' },
+      skip: offset,
+      take: limit
+    });
 
-    params.push(limit, offset);
-    const transactions = await db.query(
-      `SELECT t.id, t.type, t.amount, t.balance_before, t.balance_after, t.description, t.created_at,
-              a.account_number, u.name AS customer_name
-       FROM transactions t
-       JOIN accounts a ON t.account_id = a.id
-       JOIN customers c ON a.customer_id = c.id
-       JOIN users u ON c.user_id = u.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY t.created_at DESC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params
-    );
+    const transactions = transactionRecords.map(t => {
+      const customerName = t.account?.customer?.user?.name || 'Unknown';
+      const accountNumber = t.account?.account_number || 'Unknown';
+      const { account, ...rest } = t;
+      return { ...rest, account_number: accountNumber, customer_name: customerName };
+    });
 
-    return res.json({ transactions: transactions.rows, total });
+    return res.json({ transactions, total });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to fetch transactions', details: error.message });
   }
@@ -128,20 +111,21 @@ router.get('/transactions', authenticate, authorize('admin'), async (req, res) =
 router.put('/users/:userId/ban', authenticate, authorize('admin'), async (req, res) => {
   const { userId } = req.params;
   const { banReason } = req.body;
-  if (!banReason) {
-    return res.status(400).json({ error: 'Ban reason is required' });
-  }
+  if (!banReason) return res.status(400).json({ error: 'Ban reason is required' });
 
   try {
-    const result = await db.query(
-      'UPDATE users SET banned = $1, ban_reason = $2 WHERE id = $3 RETURNING id, name, email, banned, ban_reason',
-      [true, banReason, userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    return res.json({ user: result.rows[0] });
+    const id = parseInt(userId);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
+    if (id === req.user.id) return res.status(400).json({ error: 'You cannot ban your own account' });
+
+    const user = await db.user.update({
+      where: { id },
+      data: { banned: true, ban_reason: banReason },
+      select: { id: true, name: true, email: true, banned: true, ban_reason: true }
+    });
+    return res.json({ user });
   } catch (error) {
+    if (error.code === 'P2025') return res.status(404).json({ error: 'User not found' });
     return res.status(500).json({ error: 'Unable to ban user', details: error.message });
   }
 });
@@ -150,15 +134,17 @@ router.put('/users/:userId/unban', authenticate, authorize('admin'), async (req,
   const { userId } = req.params;
 
   try {
-    const result = await db.query(
-      'UPDATE users SET banned = $1, ban_reason = NULL WHERE id = $2 RETURNING id, name, email, banned, ban_reason',
-      [false, userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    return res.json({ user: result.rows[0] });
+    const id = parseInt(userId);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
+
+    const user = await db.user.update({
+      where: { id },
+      data: { banned: false, ban_reason: null },
+      select: { id: true, name: true, email: true, banned: true, ban_reason: true }
+    });
+    return res.json({ user });
   } catch (error) {
+    if (error.code === 'P2025') return res.status(404).json({ error: 'User not found' });
     return res.status(500).json({ error: 'Unable to unban user', details: error.message });
   }
 });
@@ -170,31 +156,24 @@ router.get('/staff', authenticate, authorize('admin'), async (req, res) => {
     const search = req.query.search || '';
     const offset = (page - 1) * limit;
 
-    const conditions = ['1=1'];
-    const params = [];
-
+    const where = {};
     if (search) {
-      params.push(`%${search}%`);
-      conditions.push(`(name ILIKE $${params.length} OR cnic ILIKE $${params.length} OR phone ILIKE $${params.length})`);
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { cnic: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } }
+      ];
     }
 
-    const countResult = await db.query(
-      `SELECT COUNT(*) FROM security_staff WHERE ${conditions.join(' AND ')}`,
-      params
-    );
-    const total = parseInt(countResult.rows[0].count, 10);
+    const total = await db.securityStaff.count({ where });
+    const staff = await db.securityStaff.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      skip: offset,
+      take: limit
+    });
 
-    params.push(limit, offset);
-    const staff = await db.query(
-      `SELECT id, name, cnic, phone, shift, notes, created_at
-       FROM security_staff
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY created_at DESC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params
-    );
-
-    return res.json({ staff: staff.rows, total });
+    return res.json({ staff, total });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to fetch staff', details: error.message });
   }
@@ -202,20 +181,15 @@ router.get('/staff', authenticate, authorize('admin'), async (req, res) => {
 
 router.post('/staff', authenticate, authorize('admin'), async (req, res) => {
   const { name, cnic, phone, shift, notes } = req.body;
-  if (!name || !cnic) {
-    return res.status(400).json({ error: 'Name and CNIC are required' });
-  }
+  if (!name || !cnic) return res.status(400).json({ error: 'Name and CNIC are required' });
 
   try {
-    const result = await db.query(
-      'INSERT INTO security_staff (name, cnic, phone, shift, notes) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [name, cnic, phone, shift, notes]
-    );
-    return res.status(201).json({ staff: result.rows[0] });
+    const staff = await db.securityStaff.create({
+      data: { name, cnic, phone, shift, notes }
+    });
+    return res.status(201).json({ staff });
   } catch (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'Security staff CNIC already exists' });
-    }
+    if (error.code === 'P2002') return res.status(409).json({ error: 'Security staff CNIC already exists' });
     return res.status(500).json({ error: 'Unable to create staff', details: error.message });
   }
 });
@@ -225,15 +199,17 @@ router.put('/staff/:staffId', authenticate, authorize('admin'), async (req, res)
   const { name, cnic, phone, shift, notes } = req.body;
 
   try {
-    const result = await db.query(
-      'UPDATE security_staff SET name = $1, cnic = $2, phone = $3, shift = $4, notes = $5 WHERE id = $6 RETURNING *',
-      [name, cnic, phone, shift, notes, staffId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Staff not found' });
-    }
-    return res.json({ staff: result.rows[0] });
+    const id = parseInt(staffId);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid staff ID' });
+
+    const staff = await db.securityStaff.update({
+      where: { id },
+      data: { name, cnic, phone, shift, notes }
+    });
+    return res.json({ staff });
   } catch (error) {
+    if (error.code === 'P2025') return res.status(404).json({ error: 'Staff not found' });
+    if (error.code === 'P2002') return res.status(409).json({ error: 'CNIC already exists' });
     return res.status(500).json({ error: 'Unable to update staff', details: error.message });
   }
 });
@@ -242,12 +218,13 @@ router.delete('/staff/:staffId', authenticate, authorize('admin'), async (req, r
   const { staffId } = req.params;
 
   try {
-    const result = await db.query('DELETE FROM security_staff WHERE id = $1 RETURNING id', [staffId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Staff not found' });
-    }
+    const id = parseInt(staffId);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid staff ID' });
+
+    await db.securityStaff.delete({ where: { id } });
     return res.json({ message: 'Staff deleted successfully' });
   } catch (error) {
+    if (error.code === 'P2025') return res.status(404).json({ error: 'Staff not found' });
     return res.status(500).json({ error: 'Unable to delete staff', details: error.message });
   }
 });

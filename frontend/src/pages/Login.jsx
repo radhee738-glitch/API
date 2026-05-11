@@ -28,6 +28,7 @@ const LoginPage = () => {
     <div className="page-container">
       <div className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
         <h1 className="page-title">Banking Login</h1>
+        {error && <div className="alert">{error}</div>}
         <form className="form-grid" onSubmit={handleSubmit}>
           <label>
             Email
@@ -55,9 +56,8 @@ const LoginPage = () => {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-        {error && <div className="alert">{error}</div>}
         <p style={{ marginTop: 16 }}>
-          New user? <Link to="/register">Create an account</Link>
+          New user? <Link to="/register" style={{ color: '#818cf8' }}>Create an account</Link>
         </p>
       </div>
     </div>

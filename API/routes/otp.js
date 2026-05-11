@@ -11,26 +11,35 @@ router.post('/generate', authenticate, async (req, res) => {
 
   try {
     // Invalidate any existing unused OTPs for this user
-    await db.query(
-      'UPDATE otp_codes SET used = TRUE WHERE user_id = $1 AND used = FALSE',
-      [req.user.id]
-    );
+    await db.otpCode.updateMany({
+      where: { user_id: req.user.id, used: false },
+      data: { used: true }
+    });
 
     // Generate 6-digit OTP
-    const code = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const user = await db.user.findUnique({ where: { id: req.user.id } });
+    if (!user.otp_enabled) {
+      return res.json({ message: 'OTP is disabled for your account', skipped: true });
+    }
 
-    await db.query(
-      'INSERT INTO otp_codes (user_id, code, purpose, expires_at) VALUES ($1, $2, $3, $4)',
-      [req.user.id, code, purpose, expiresAt]
-    );
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await db.otpCode.create({
+      data: {
+        user_id: req.user.id,
+        code,
+        purpose,
+        expires_at: expiresAt
+      }
+    });
 
     // In production, this would be sent via SMS/email
     // For demo purposes, we return the OTP directly
     return res.json({
       message: 'OTP generated successfully. In production this would be sent via SMS/email.',
       otp: code,
-      expiresIn: '5 minutes'
+      expiresIn: '10 minutes'
     });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to generate OTP', details: error.message });
@@ -45,12 +54,12 @@ router.post('/verify', authenticate, async (req, res) => {
   }
 
   try {
-    const result = await db.query(
-      'SELECT id FROM otp_codes WHERE user_id = $1 AND code = $2 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
-      [req.user.id, otp]
-    );
+    const otpRecord = await db.otpCode.findFirst({
+      where: { user_id: req.user.id, code: otp, used: false, expires_at: { gt: new Date() } },
+      orderBy: { created_at: 'desc' }
+    });
 
-    if (!result.rows[0]) {
+    if (!otpRecord) {
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 

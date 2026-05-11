@@ -29,7 +29,7 @@ export const getAllLoans = () => api.get('/loans/all');
 export const applyForLoan = (loanData) => api.post('/loans/apply', loanData);
 export const rejectLoan = (loanId, reason) => api.put(`/loans/reject/${loanId}`, { rejectionReason: reason });
 export const approveLoan = (loanId) => api.put(`/loans/approve/${loanId}`);
-export const getCounters = () => api.get('/tickets/counters');
+
 export const getSecurityStaff = (params) => api.get('/admin/staff', { params });
 export const createSecurityStaff = (staff) => api.post('/admin/staff', staff);
 export const updateSecurityStaff = (staffId, staff) => api.put(`/admin/staff/${staffId}`, staff);

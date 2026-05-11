@@ -7,12 +7,17 @@ const router = express.Router();
 
 router.get('/', authenticate, async (req, res) => {
   try {
-    const userResult = await db.query('SELECT id, name, email, role, created_at FROM users WHERE id = $1', [req.user.id]);
-    const user = userResult.rows[0];
+    const user = await db.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, name: true, email: true, role: true, created_at: true }
+    });
 
     if (user.role === 'customer') {
-      const customerResult = await db.query('SELECT cnic, phone, address, dob, status FROM customers WHERE user_id = $1', [user.id]);
-      return res.json({ user, profile: customerResult.rows[0] || null });
+      const customer = await db.customer.findFirst({
+        where: { user_id: user.id },
+        select: { cnic: true, phone: true, address: true, dob: true, status: true }
+      });
+      return res.json({ user, profile: customer || null });
     }
 
     return res.json({ user, profile: null });
@@ -25,61 +30,47 @@ router.put('/', authenticate, async (req, res) => {
   const { name, email, password, phone, address, dob } = req.body;
 
   try {
-    const fields = [];
-    const values = [];
-    let idx = 1;
-
-    if (name) {
-      fields.push(`name = $${idx++}`);
-      values.push(name);
-    }
-    if (email) {
-      fields.push(`email = $${idx++}`);
-      values.push(email);
-    }
+    const userData = {
+      name,
+      email,
+      otp_enabled: typeof req.body.otp_enabled === 'boolean' ? req.body.otp_enabled : undefined
+    };
     if (password) {
-      const hashedPassword = await bcrypt.hash(password, 12);
-      fields.push(`password_hash = $${idx++}`);
-      values.push(hashedPassword);
+      userData.password_hash = await bcrypt.hash(password, 12);
     }
 
-    if (fields.length > 0) {
-      values.push(req.user.id);
-      await db.query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}`, values);
-    }
+    const updatedUser = await db.user.update({
+      where: { id: req.user.id },
+      data: userData,
+      select: { id: true, name: true, email: true, role: true, otp_enabled: true, created_at: true }
+    });
 
     if (req.user.role === 'customer') {
-      const profileFields = [];
-      const profileValues = [];
-      let profileIdx = 1;
+      const profileData = {};
+      if (phone) profileData.phone = phone;
+      if (address) profileData.address = address;
+      if (dob) profileData.dob = new Date(dob);
 
-      if (phone) {
-        profileFields.push(`phone = $${profileIdx++}`);
-        profileValues.push(phone);
-      }
-      if (address) {
-        profileFields.push(`address = $${profileIdx++}`);
-        profileValues.push(address);
-      }
-      if (dob) {
-        profileFields.push(`dob = $${profileIdx++}`);
-        profileValues.push(dob);
-      }
-
-      if (profileFields.length > 0) {
-        profileValues.push(req.user.id);
-        await db.query(`UPDATE customers SET ${profileFields.join(', ')} WHERE user_id = $${profileIdx}`, profileValues);
+      if (Object.keys(profileData).length > 0) {
+        await db.customer.updateMany({
+          where: { user_id: req.user.id },
+          data: profileData
+        });
       }
     }
 
     req.audit.action = 'profile.update';
     req.audit.details = JSON.stringify({ email, name, phone, address, dob });
 
-    const userResult = await db.query('SELECT id, name, email, role, created_at FROM users WHERE id = $1', [req.user.id]);
-    const user = userResult.rows[0];
-    const customerResult = await db.query('SELECT cnic, phone, address, dob, status FROM customers WHERE user_id = $1', [req.user.id]);
+    let updatedProfile = null;
+    if (req.user.role === 'customer') {
+      updatedProfile = await db.customer.findFirst({
+        where: { user_id: req.user.id },
+        select: { cnic: true, phone: true, address: true, dob: true, status: true }
+      });
+    }
 
-    return res.json({ user, profile: customerResult.rows[0] || null });
+    return res.json({ user: updatedUser, profile: updatedProfile });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to update profile', details: error.message });
   }
@@ -87,11 +78,13 @@ router.put('/', authenticate, async (req, res) => {
 
 router.get('/activity', authenticate, async (req, res) => {
   try {
-    const historyResult = await db.query(
-      'SELECT id, action, description, ip_address, created_at FROM audit_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
-      [req.user.id]
-    );
-    return res.json({ activity: historyResult.rows });
+    const activity = await db.auditLog.findMany({
+      where: { user_id: req.user.id },
+      select: { id: true, action: true, description: true, ip_address: true, created_at: true },
+      orderBy: { created_at: 'desc' },
+      take: 20
+    });
+    return res.json({ activity });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to load activity', details: error.message });
   }

@@ -4,227 +4,211 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-const recordTransaction = async (client, accountId, type, amount, before, after, counterId, ticketNumber, description) => {
-  await client.query(
-    `INSERT INTO transactions (account_id, type, amount, balance_before, balance_after, counter_id, ticket_number, description)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [accountId, type, amount, before, after, counterId, ticketNumber, description]
-  );
+const recordTransaction = async (tx, accountId, type, amount, before, after, description) => {
+  await tx.transaction.create({
+    data: {
+      account_id: accountId,
+      type,
+      amount,
+      balance_before: before,
+      balance_after: after,
+      description
+    }
+  });
+};
+
+const handleTransactionError = (res, error) => {
+  const msg = error.message;
+  if (msg === 'Account not found' || msg === 'One or both accounts were not found') {
+    return res.status(404).json({ error: msg });
+  }
+  if (msg === 'You can only transfer from your own accounts' || msg === 'You can only deposit to your own accounts' || msg === 'You can only withdraw from your own accounts') {
+    return res.status(403).json({ error: msg });
+  }
+  if (msg === 'Insufficient funds' || msg === 'Invalid or expired OTP') {
+    return res.status(400).json({ error: msg });
+  }
+  return res.status(500).json({ error: 'Transaction failed', details: error.message });
 };
 
 router.post('/transfer', authenticate, authorize('customer', 'teller', 'admin'), async (req, res) => {
-  const { fromAccount, toAccount, amount, counterId, ticketNumber, description = 'fund transfer', otp } = req.body;
+  const { fromAccount, toAccount, amount, description = 'fund transfer', otp } = req.body;
   const transferAmount = parseFloat(amount);
 
   if (!fromAccount || !toAccount || !transferAmount || transferAmount <= 0) {
     return res.status(400).json({ error: 'Valid fromAccount, toAccount, and positive amount are required' });
   }
 
-  if (!otp) {
+  const user = await db.user.findUnique({ where: { id: req.user.id } });
+  if (user.otp_enabled && !otp) {
     return res.status(400).json({ error: 'OTP is required for transfers' });
   }
 
-  const client = await db.getClient();
   try {
-    await client.query('BEGIN');
+    const result = await db.$transaction(async (tx) => {
+      const fromRow = await tx.account.findUnique({ where: { account_number: fromAccount }, include: { customer: true } });
+      const toRow = await tx.account.findUnique({ where: { account_number: toAccount } });
 
-    const fromResult = await client.query('SELECT * FROM accounts WHERE account_number = $1 FOR UPDATE', [fromAccount]);
-    const toResult = await client.query('SELECT * FROM accounts WHERE account_number = $1 FOR UPDATE', [toAccount]);
+      if (!fromRow || !toRow) throw new Error('One or both accounts were not found');
 
-    const fromRow = fromResult.rows[0];
-    const toRow = toResult.rows[0];
-
-    if (!fromRow || !toRow) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'One or both accounts were not found' });
-    }
-
-    // Customers can only transfer from their own accounts
-    if (req.user.role === 'customer') {
-      const ownerCheck = await client.query(
-        'SELECT c.user_id FROM customers c WHERE c.id = $1',
-        [fromRow.customer_id]
-      );
-      if (!ownerCheck.rows[0] || ownerCheck.rows[0].user_id !== req.user.id) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ error: 'You can only transfer from your own accounts' });
+      if (req.user.role === 'customer' && fromRow.customer.user_id !== req.user.id) {
+        throw new Error('You can only transfer from your own accounts');
       }
-    }
 
-    if (parseFloat(fromRow.balance) < transferAmount) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Insufficient funds' });
-    }
+      if (parseFloat(fromRow.balance) < transferAmount) throw new Error('Insufficient funds');
 
-    // Verify OTP
-    const otpResult = await client.query(
-      'SELECT id FROM otp_codes WHERE user_id = $1 AND code = $2 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
-      [req.user.id, otp]
-    );
-    if (!otpResult.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    }
+      if (user.otp_enabled) {
+        const otpRecord = await tx.otpCode.findFirst({
+          where: { user_id: req.user.id, code: otp, used: false, expires_at: { gt: new Date() } },
+          orderBy: { created_at: 'desc' }
+        });
+        if (!otpRecord) throw new Error('Invalid or expired OTP');
+        await tx.otpCode.update({ where: { id: otpRecord.id }, data: { used: true } });
+      }
 
-    const fromAfter = parseFloat(fromRow.balance) - transferAmount;
-    const toAfter = parseFloat(toRow.balance) + transferAmount;
+      const fromAfter = parseFloat(fromRow.balance) - transferAmount;
+      const toAfter = parseFloat(toRow.balance) + transferAmount;
 
-    await client.query('UPDATE accounts SET balance = $1 WHERE id = $2', [fromAfter, fromRow.id]);
-    await client.query('UPDATE accounts SET balance = $1 WHERE id = $2', [toAfter, toRow.id]);
+      await tx.account.update({ where: { id: fromRow.id }, data: { balance: fromAfter } });
+      await tx.account.update({ where: { id: toRow.id }, data: { balance: toAfter } });
 
-    await client.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpResult.rows[0].id]);
+      await recordTransaction(tx, fromRow.id, 'transfer-debit', transferAmount, parseFloat(fromRow.balance), fromAfter, description);
+      await recordTransaction(tx, toRow.id, 'transfer-credit', transferAmount, parseFloat(toRow.balance), toAfter, description);
 
-    await recordTransaction(client, fromRow.id, 'transfer-debit', transferAmount, parseFloat(fromRow.balance), fromAfter, counterId, ticketNumber, description);
-    await recordTransaction(client, toRow.id, 'transfer-credit', transferAmount, parseFloat(toRow.balance), toAfter, counterId, ticketNumber, description);
+      return { fromAfter, toAfter };
+    });
 
     req.audit.action = 'transaction.transfer';
     req.audit.details = JSON.stringify({ fromAccount, toAccount, amount: transferAmount, userId: req.user.id, description });
-    await client.query('COMMIT');
-    return res.json({ message: 'Transfer completed', fromAccount: fromAfter, toAccount: toAfter });
+    return res.json({ message: 'Transfer completed', fromAccount: result.fromAfter, toAccount: result.toAfter });
   } catch (error) {
-    await client.query('ROLLBACK');
-    return res.status(500).json({ error: 'Transfer failed', details: error.message });
-  } finally {
-    client.release();
+    return handleTransactionError(res, error);
   }
 });
 
 router.post('/deposit', authenticate, authorize('customer', 'teller', 'admin'), async (req, res) => {
-  const { accountNumber, amount, counterId, ticketNumber, description = 'deposit', otp } = req.body;
+  const { accountNumber, amount, description = 'deposit', otp } = req.body;
   const depositAmount = parseFloat(amount);
   if (!accountNumber || !depositAmount || depositAmount <= 0) {
     return res.status(400).json({ error: 'Valid accountNumber and deposit amount are required' });
   }
 
-  if (!otp) {
+  const user = await db.user.findUnique({ where: { id: req.user.id } });
+  if (user.otp_enabled && !otp) {
     return res.status(400).json({ error: 'OTP is required for deposits' });
   }
 
-  const client = await db.getClient();
   try {
-    await client.query('BEGIN');
-    const accountResult = await client.query('SELECT * FROM accounts WHERE account_number = $1 FOR UPDATE', [accountNumber]);
-    const account = accountResult.rows[0];
-    if (!account) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Account not found' });
-    }
+    const result = await db.$transaction(async (tx) => {
+      const account = await tx.account.findUnique({ where: { account_number: accountNumber }, include: { customer: true } });
+      if (!account) throw new Error('Account not found');
 
-    if (req.user.role === 'customer') {
-      const ownerCheck = await client.query(
-        'SELECT c.user_id FROM customers c WHERE c.id = $1',
-        [account.customer_id]
-      );
-      if (!ownerCheck.rows[0] || ownerCheck.rows[0].user_id !== req.user.id) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ error: 'You can only deposit to your own accounts' });
+      if (req.user.role === 'customer' && account.customer.user_id !== req.user.id) {
+        throw new Error('You can only deposit to your own accounts');
       }
-    }
 
-    // Verify OTP
-    const otpResult = await client.query(
-      'SELECT id FROM otp_codes WHERE user_id = $1 AND code = $2 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
-      [req.user.id, otp]
-    );
-    if (!otpResult.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    }
+      if (user.otp_enabled) {
+        const otpRecord = await tx.otpCode.findFirst({
+          where: { user_id: req.user.id, code: otp, used: false, expires_at: { gt: new Date() } },
+          orderBy: { created_at: 'desc' }
+        });
+        if (!otpRecord) throw new Error('Invalid or expired OTP');
+        await tx.otpCode.update({ where: { id: otpRecord.id }, data: { used: true } });
+      }
 
-    const after = parseFloat(account.balance) + depositAmount;
-    await client.query('UPDATE accounts SET balance = $1 WHERE id = $2', [after, account.id]);
-    await client.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpResult.rows[0].id]);
-    await recordTransaction(client, account.id, 'deposit', depositAmount, parseFloat(account.balance), after, counterId, ticketNumber, description);
+      const after = parseFloat(account.balance) + depositAmount;
+      await tx.account.update({ where: { id: account.id }, data: { balance: after } });
+      await recordTransaction(tx, account.id, 'deposit', depositAmount, parseFloat(account.balance), after, description);
+
+      return { after };
+    });
+
     req.audit.action = 'transaction.deposit';
     req.audit.details = JSON.stringify({ accountNumber, amount: depositAmount, userId: req.user.id, description });
-    await client.query('COMMIT');
-    return res.json({ message: 'Deposit successful', balance: after });
+    return res.json({ message: 'Deposit successful', balance: result.after });
   } catch (error) {
-    await client.query('ROLLBACK');
-    return res.status(500).json({ error: 'Deposit failed', details: error.message });
-  } finally {
-    client.release();
+    return handleTransactionError(res, error);
   }
 });
 
 router.post('/withdraw', authenticate, authorize('customer', 'teller', 'admin'), async (req, res) => {
-  const { accountNumber, amount, counterId, ticketNumber, description = 'withdrawal', otp } = req.body;
+  const { accountNumber, amount, description = 'withdrawal', otp } = req.body;
   const withdrawAmount = parseFloat(amount);
   if (!accountNumber || !withdrawAmount || withdrawAmount <= 0) {
     return res.status(400).json({ error: 'Valid accountNumber and withdrawal amount are required' });
   }
 
-  if (!otp) {
+  const user = await db.user.findUnique({ where: { id: req.user.id } });
+  if (user.otp_enabled && !otp) {
     return res.status(400).json({ error: 'OTP is required for withdrawals' });
   }
 
-  const client = await db.getClient();
   try {
-    await client.query('BEGIN');
-    const accountResult = await client.query('SELECT * FROM accounts WHERE account_number = $1 FOR UPDATE', [accountNumber]);
-    const account = accountResult.rows[0];
-    if (!account) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Account not found' });
-    }
+    const result = await db.$transaction(async (tx) => {
+      const account = await tx.account.findUnique({ where: { account_number: accountNumber }, include: { customer: true } });
+      if (!account) throw new Error('Account not found');
 
-    if (req.user.role === 'customer') {
-      const ownerCheck = await client.query(
-        'SELECT c.user_id FROM customers c WHERE c.id = $1',
-        [account.customer_id]
-      );
-      if (!ownerCheck.rows[0] || ownerCheck.rows[0].user_id !== req.user.id) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ error: 'You can only withdraw from your own accounts' });
+      if (req.user.role === 'customer' && account.customer.user_id !== req.user.id) {
+        throw new Error('You can only withdraw from your own accounts');
       }
-    }
 
-    if (parseFloat(account.balance) < withdrawAmount) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Insufficient funds' });
-    }
+      if (parseFloat(account.balance) < withdrawAmount) throw new Error('Insufficient funds');
 
-    // Verify OTP
-    const otpResult = await client.query(
-      'SELECT id FROM otp_codes WHERE user_id = $1 AND code = $2 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
-      [req.user.id, otp]
-    );
-    if (!otpResult.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
-    }
+      if (user.otp_enabled) {
+        const otpRecord = await tx.otpCode.findFirst({
+          where: { user_id: req.user.id, code: otp, used: false, expires_at: { gt: new Date() } },
+          orderBy: { created_at: 'desc' }
+        });
+        if (!otpRecord) throw new Error('Invalid or expired OTP');
+        await tx.otpCode.update({ where: { id: otpRecord.id }, data: { used: true } });
+      }
 
-    const after = parseFloat(account.balance) - withdrawAmount;
-    await client.query('UPDATE accounts SET balance = $1 WHERE id = $2', [after, account.id]);
-    await client.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpResult.rows[0].id]);
-    await recordTransaction(client, account.id, 'withdrawal', withdrawAmount, parseFloat(account.balance), after, counterId, ticketNumber, description);
+      const after = parseFloat(account.balance) - withdrawAmount;
+      await tx.account.update({ where: { id: account.id }, data: { balance: after } });
+      await recordTransaction(tx, account.id, 'withdrawal', withdrawAmount, parseFloat(account.balance), after, description);
+
+      return { after };
+    });
+
     req.audit.action = 'transaction.withdraw';
     req.audit.details = JSON.stringify({ accountNumber, amount: withdrawAmount, userId: req.user.id, description });
-    await client.query('COMMIT');
-    return res.json({ message: 'Withdrawal successful', balance: after });
+    return res.json({ message: 'Withdrawal successful', balance: result.after });
   } catch (error) {
-    await client.query('ROLLBACK');
-    return res.status(500).json({ error: 'Withdrawal failed', details: error.message });
-  } finally {
-    client.release();
+    return handleTransactionError(res, error);
   }
 });
 
 router.get('/history/:accountNumber', authenticate, async (req, res) => {
   const { accountNumber } = req.params;
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 50;
+  const offset = (page - 1) * limit;
+
   try {
-    const accountResult = await db.query('SELECT a.id, c.user_id FROM accounts a JOIN customers c ON a.customer_id = c.id WHERE a.account_number = $1', [accountNumber]);
-    const account = accountResult.rows[0];
+    const account = await db.account.findUnique({
+      where: { account_number: accountNumber },
+      include: { customer: { select: { user_id: true } } }
+    });
+
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    if (req.user.role === 'customer' && account.user_id !== req.user.id) {
+    if (req.user.role === 'customer' && account.customer.user_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const transactions = await db.query('SELECT * FROM transactions WHERE account_id = $1 ORDER BY created_at DESC', [account.id]);
-    return res.json({ history: transactions.rows });
+    const [transactions, total] = await Promise.all([
+      db.transaction.findMany({
+        where: { account_id: account.id },
+        orderBy: { created_at: 'desc' },
+        skip: offset,
+        take: limit
+      }),
+      db.transaction.count({ where: { account_id: account.id } })
+    ]);
+
+    return res.json({ history: transactions, total, page, limit });
   } catch (error) {
     return res.status(500).json({ error: 'Unable to fetch history', details: error.message });
   }

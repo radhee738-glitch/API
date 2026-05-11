@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getAccounts, getDashboard } from '../services/api';
+import { getAccounts, getDashboard, getLoans, getTransactions } from '../services/api';
 
 const formatCurrency = (amount, currency = 'PKR') => {
   const num = parseFloat(amount);
@@ -13,6 +13,7 @@ const DashboardPage = () => {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [customerLoans, setCustomerLoans] = useState([]);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -20,6 +21,9 @@ const DashboardPage = () => {
       getAccounts()
         .then((response) => setAccounts(response.data.accounts))
         .catch((err) => setError(err.response?.data?.error || 'Unable to load accounts'));
+      getLoans()
+        .then((response) => setCustomerLoans(response.data.loans || []))
+        .catch(() => {});
       setDashboard(null);
       return;
     }
@@ -48,77 +52,45 @@ const DashboardPage = () => {
         <div className="metric-card">
           <strong>Transactions</strong>
           <p style={{ fontSize: '1.5rem', fontWeight: 700, margin: '8px 0 0' }}>
-            {dashboard?.transactions ?? '—'}
+            {user?.role === 'admin' ? (dashboard?.transactions ?? '—') : '—'}
           </p>
         </div>
         <div className="metric-card">
           <strong>Loans</strong>
           <p style={{ fontSize: '1.5rem', fontWeight: 700, margin: '8px 0 0' }}>
-            {dashboard?.loans ?? '—'}
+            {user?.role === 'admin' ? (dashboard?.loans ?? '—') : customerLoans.length}
           </p>
         </div>
       </div>
 
-      {user?.role === 'admin' ? (
-        <div className="card" style={{ marginTop: 24 }}>
-          <div className="navbar">
-            <div>
-              <h2 className="page-title" style={{ marginBottom: 0, fontSize: '1.4rem' }}>
-                Admin Summary
-              </h2>
-              <p className="text-muted">Admin dashboard counts are shown here. Use the admin panel for management tools.</p>
-            </div>
+      <div className="card" style={{ marginTop: 24 }}>
+        <div className="navbar">
+          <div>
+            <h2 className="page-title" style={{ marginBottom: 0, fontSize: '1.4rem' }}>
+              Accounts
+            </h2>
+            <p className="text-muted">Your active bank accounts.</p>
           </div>
+          <Link to="/accounts" className="secondary">
+            View all
+          </Link>
+        </div>
+        {accounts.length === 0 ? (
+          <p>No accounts found. Ask an admin or teller to open one for you.</p>
+        ) : (
           <div className="row" style={{ marginTop: 16 }}>
-            <div className="metric-card">
-              <strong>Customers</strong>
-              <p>{dashboard?.customers ?? '—'}</p>
-            </div>
-            <div className="metric-card">
-              <strong>Tickets</strong>
-              <p>{dashboard?.tickets ?? '—'}</p>
-            </div>
-            <div className="metric-card">
-              <strong>Security staff</strong>
-              <p>{dashboard?.securityStaff ?? '—'}</p>
-            </div>
+            {accounts.slice(0, 3).map((account) => (
+              <div key={account.id} className="metric-card">
+                <strong style={{ textTransform: 'capitalize' }}>{account.type}</strong>
+                <p style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{account.account_number}</p>
+                <p className="currency" style={{ fontSize: '1.2rem', margin: '4px 0 0' }}>
+                  {formatCurrency(account.balance, account.currency)}
+                </p>
+              </div>
+            ))}
           </div>
-          <div style={{ marginTop: 16 }}>
-            <Link to="/admin" className="primary">
-              Open Admin Panel
-            </Link>
-          </div>
-        </div>
-      ) : (
-        <div className="card" style={{ marginTop: 24 }}>
-          <div className="navbar">
-            <div>
-              <h2 className="page-title" style={{ marginBottom: 0, fontSize: '1.4rem' }}>
-                Accounts
-              </h2>
-              <p className="text-muted">Your active bank accounts.</p>
-            </div>
-            <Link to="/accounts" className="secondary">
-              View all
-            </Link>
-          </div>
-          {accounts.length === 0 ? (
-            <p>No accounts found. Ask an admin or teller to open one for you.</p>
-          ) : (
-            <div className="row" style={{ marginTop: 16 }}>
-              {accounts.slice(0, 3).map((account) => (
-                <div key={account.id} className="metric-card">
-                  <strong style={{ textTransform: 'capitalize' }}>{account.type}</strong>
-                  <p style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>{account.account_number}</p>
-                  <p className="currency" style={{ fontSize: '1.2rem', margin: '4px 0 0' }}>
-                    {formatCurrency(account.balance, account.currency)}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="row" style={{ marginTop: 24 }}>
         <Link to="/transactions" className="card secondary" style={{ textAlign: 'center', textDecoration: 'none' }}>
@@ -142,7 +114,7 @@ const DashboardPage = () => {
         {user?.role === 'admin' && (
           <Link to="/admin" className="card secondary" style={{ textAlign: 'center', textDecoration: 'none' }}>
             <h3>Admin panel</h3>
-            <p className="text-muted">Manage loans, counters, and staff.</p>
+            <p className="text-muted">Manage users, loans, and staff.</p>
           </Link>
         )}
       </div>

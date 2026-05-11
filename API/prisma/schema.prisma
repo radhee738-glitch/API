@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int        @id @default(autoincrement())
+  name          String
+  email         String     @unique
+  password_hash String
+  role          String     @default("customer")
+  banned        Boolean    @default(false)
+  ban_reason    String?
+  otp_enabled   Boolean    @default(true)
+  created_at    DateTime   @default(now())
+
+  customers     Customer[]
+  sessions      Session[]
+  otp_codes     OtpCode[]
+  audit_logs    AuditLog[]
+
+  @@map("users")
+}
+
+model Customer {
+  id         Int        @id @default(autoincrement())
+  user_id    Int
+  user       User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  cnic       String     @unique
+  phone      String?
+  address    String?
+  dob        DateTime?  @db.Date
+  status     String     @default("active")
+  created_at DateTime   @default(now())
+
+  accounts   Account[]
+  loans      Loan[]
+  @@map("customers")
+}
+
+model Account {
+  id             Int           @id @default(autoincrement())
+  account_number String        @unique
+  customer_id    Int
+  customer       Customer      @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  type           String        @default("savings")
+  balance        Decimal       @default(0) @db.Decimal(18, 2)
+  currency       String        @default("PKR")
+  status         String        @default("active")
+  opened_at      DateTime      @default(now())
+
+  transactions   Transaction[]
+  loans          Loan[]
+
+  @@map("accounts")
+}
+
+
+
+model Transaction {
+  id             Int        @id @default(autoincrement())
+  account_id     Int
+  account        Account    @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  type           String
+  amount         Decimal    @db.Decimal(18, 2)
+  balance_before Decimal    @db.Decimal(18, 2)
+  balance_after  Decimal    @db.Decimal(18, 2)
+  description    String?
+  created_at     DateTime   @default(now())
+
+  @@map("transactions")
+}
+
+model Loan {
+  id               Int       @id @default(autoincrement())
+  customer_id      Int
+  customer         Customer  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  account_id       Int?
+  account          Account?  @relation(fields: [account_id], references: [id])
+  amount           Decimal   @db.Decimal(18, 2)
+  purpose          String?
+  term_months      Int
+  interest_rate    Decimal   @default(12.0) @db.Decimal(5, 2)
+  status           String    @default("pending")
+  credit_score     Int?
+  rejection_reason String?
+  approved_at      DateTime?
+  questionnaire    Json?
+  created_at       DateTime  @default(now())
+
+  @@map("loans")
+}
+
+
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  user_id     Int?
+  user        User?    @relation(fields: [user_id], references: [id])
+  action      String
+  description String?
+  ip_address  String?
+  created_at  DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model Session {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token      String
+  jti        String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@map("sessions")
+}
+
+model OtpCode {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  code       String
+  purpose    String   @default("transaction")
+  used       Boolean  @default(false)
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@map("otp_codes")
+}
+
+model SecurityStaff {
+  id         Int      @id @default(autoincrement())
+  name       String
+  cnic       String   @unique
+  phone      String?
+  shift      String?
+  notes      String?
+  created_at DateTime @default(now())
+
+  @@map("security_staff")
+}

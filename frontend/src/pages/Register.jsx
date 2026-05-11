@@ -36,6 +36,7 @@ const RegisterPage = () => {
     <div className="page-container">
       <div className="card" style={{ maxWidth: 640, margin: '0 auto' }}>
         <h1 className="page-title">Create a Banking Account</h1>
+        {error && <div className="alert">{error}</div>}
         <form className="form-grid" onSubmit={handleSubmit}>
           <label>
             Full name
@@ -76,16 +77,15 @@ const RegisterPage = () => {
             <input name="address" type="text" value={form.address} onChange={handleChange} />
           </label>
           <label>
-            Date of birth
+            Date of Birth
             <input name="dob" type="date" value={form.dob} onChange={handleChange} />
           </label>
           <button type="submit" className="primary" disabled={loading}>
             {loading ? 'Creating account...' : 'Register'}
           </button>
         </form>
-        {error && <div className="alert">{error}</div>}
         <p style={{ marginTop: 16 }}>
-          Already have an account? <Link to="/login">Log in</Link>
+          Already have an account? <Link to="/login" style={{ color: '#818cf8' }}>Log in</Link>
         </p>
       </div>
     </div>

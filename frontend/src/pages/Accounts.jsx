@@ -45,6 +45,7 @@ const AccountsPage = () => {
         {accounts.length === 0 ? (
           <p>No accounts available yet. Ask an admin or teller to open one for you.</p>
         ) : (
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -69,6 +70,7 @@ const AccountsPage = () => {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
       {error && <div className="alert">{error}</div>}

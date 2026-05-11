@@ -10,23 +10,29 @@ const authenticate = async (req, res, next) => {
   const token = authHeader.slice(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const userResult = await db.query('SELECT id, name, email, role, banned FROM users WHERE id = $1', [payload.id]);
-    if (!userResult.rows[0]) {
+    const user = await db.user.findUnique({
+      where: { id: payload.id },
+      select: { id: true, name: true, email: true, role: true, banned: true }
+    });
+    if (!user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    if (userResult.rows[0].banned) {
+    if (user.banned) {
       return res.status(403).json({ error: 'Account banned' });
     }
 
-    const sessionResult = await db.query(
-      'SELECT id FROM sessions WHERE jti = $1 AND user_id = $2 AND expires_at > NOW()',
-      [payload.jti, payload.id]
-    );
-    if (!sessionResult.rows[0]) {
+    const session = await db.session.findFirst({
+      where: {
+        jti: payload.jti,
+        user_id: payload.id,
+        expires_at: { gt: new Date() }
+      }
+    });
+    if (!session) {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
-    req.user = { ...userResult.rows[0], jti: payload.jti };
+    req.user = { ...user, jti: payload.jti };
     return next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -56,10 +62,14 @@ const audit = (req, res, next) => {
     if (!req.audit || !req.audit.action) return;
 
     try {
-      await db.query(
-        'INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES ($1, $2, $3, $4)',
-        [req.user?.id || null, req.audit.action, req.audit.details || null, req.ip]
-      );
+      await db.auditLog.create({
+        data: {
+          user_id: req.user?.id || null,
+          action: req.audit.action,
+          description: req.audit.details || null,
+          ip_address: req.ip
+        }
+      });
     } catch (error) {
       console.error('Audit log failed:', error.message);
     }

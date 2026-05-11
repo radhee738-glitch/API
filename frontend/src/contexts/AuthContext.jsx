@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { login as loginRequest, register as registerRequest, setAuthToken } from '../services/api';
+import api, { login as loginRequest, register as registerRequest, setAuthToken } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -58,7 +58,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await import('../services/api').then(m => m.default.post('/auth/logout'));
+      await api.post('/auth/logout');
     } catch (err) {
       // Ignore errors — we still clear local state
     }
@@ -69,8 +69,13 @@ export const AuthProvider = ({ children }) => {
     setAuthToken(null);
   };
 
+  const updateUser = (newUser) => {
+    setUser(newUser);
+    localStorage.setItem('banking_user', JSON.stringify(newUser));
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, error, login, register, logout, setError }}>
+    <AuthContext.Provider value={{ user, token, loading, error, login, register, logout, updateUser, setError }}>
       {children}
     </AuthContext.Provider>
   );

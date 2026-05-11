@@ -27,19 +27,14 @@ const TransactionsPage = () => {
   // OTP State
   const [otpModalOpen, setOtpModalOpen] = useState(false);
   const [otpCode, setOtpCode] = useState('');
+  const [generatedOtp, setGeneratedOtp] = useState(null);
+  const [otpError, setOtpError] = useState(null);
   const [currentAction, setCurrentAction] = useState(null); // 'transfer', 'deposit', 'withdraw'
 
   useEffect(() => {
     getAccounts()
       .then((response) => {
         setAccounts(response.data.accounts);
-        if (response.data.accounts.length > 0) {
-          const firstAccount = response.data.accounts[0].account_number;
-          setSelectedAccount(firstAccount);
-          setTransferForm(prev => ({ ...prev, fromAccount: firstAccount }));
-          setDepositForm(prev => ({ ...prev, accountNumber: firstAccount }));
-          setWithdrawForm(prev => ({ ...prev, accountNumber: firstAccount }));
-        }
       })
       .catch((err) => setError(err.response?.data?.error || 'Unable to load accounts'));
   }, []);
@@ -57,12 +52,59 @@ const TransactionsPage = () => {
     setLoading(true);
     try {
       const response = await generateOtp({ purpose: actionType });
-      // In demo mode, the OTP is returned in the response
-      alert(`DEMO MODE: Your OTP is ${response.data.otp}`);
-      setCurrentAction(actionType);
-      setOtpModalOpen(true);
+      
+      if (response.data.skipped) {
+        // OTP disabled — proceed directly
+        setCurrentAction(actionType);
+        finalizeTransaction(actionType, '');
+      } else {
+        // Store OTP and open the custom verification modal
+        setGeneratedOtp(response.data.otp);
+        setOtpCode('');
+        setOtpError(null);
+        setCurrentAction(actionType);
+        setOtpModalOpen(true);
+      }
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to generate OTP');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const finalizeTransaction = async (action, otp) => {
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      if (action === 'transfer') {
+        await transfer({ ...transferForm, otp });
+        setSuccess('Transfer completed successfully!');
+        setTransferForm({ ...transferForm, toAccount: '', amount: '', description: '' });
+      } else if (action === 'deposit') {
+        await deposit({ ...depositForm, otp });
+        setSuccess('Deposit completed successfully!');
+        setDepositForm({ ...depositForm, amount: '', description: '' });
+      } else if (action === 'withdraw') {
+        await withdraw({ ...withdrawForm, otp });
+        setSuccess('Withdrawal completed successfully!');
+        setWithdrawForm({ ...withdrawForm, amount: '', description: '' });
+      }
+
+      setOtpModalOpen(false);
+      setOtpCode('');
+      setCurrentAction(null);
+
+      // Refresh history and accounts
+      const [txRes, accRes] = await Promise.all([
+        selectedAccount ? getTransactions(selectedAccount) : Promise.resolve(null),
+        getAccounts()
+      ]);
+      if (txRes) setHistory(txRes.data.history);
+      setAccounts(accRes.data.accounts);
+    } catch (err) {
+      setError(err.response?.data?.error || `${action} failed`);
     } finally {
       setLoading(false);
     }
@@ -75,41 +117,23 @@ const TransactionsPage = () => {
 
   const handleVerifyAndSubmit = async (event) => {
     event.preventDefault();
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
+    setOtpError(null);
 
-    try {
-      if (currentAction === 'transfer') {
-        await transfer({ ...transferForm, otp: otpCode });
-        setSuccess('Transfer completed successfully!');
-        setTransferForm({ ...transferForm, toAccount: '', amount: '', description: '' });
-      } else if (currentAction === 'deposit') {
-        await deposit({ ...depositForm, otp: otpCode });
-        setSuccess('Deposit completed successfully!');
-        setDepositForm({ ...depositForm, amount: '', description: '' });
-      } else if (currentAction === 'withdraw') {
-        await withdraw({ ...withdrawForm, otp: otpCode });
-        setSuccess('Withdrawal completed successfully!');
-        setWithdrawForm({ ...withdrawForm, amount: '', description: '' });
-      }
-
-      setOtpModalOpen(false);
-      setOtpCode('');
-      setCurrentAction(null);
-
-      // Refresh history and accounts
-      const [txRes, accRes] = await Promise.all([
-        getTransactions(selectedAccount),
-        getAccounts()
-      ]);
-      setHistory(txRes.data.history);
-      setAccounts(accRes.data.accounts);
-    } catch (err) {
-      setError(err.response?.data?.error || `${currentAction} failed`);
-    } finally {
-      setLoading(false);
+    // Client-side match first for instant feedback
+    if (generatedOtp && otpCode !== generatedOtp) {
+      setOtpError('OTP does not match. Please check and try again.');
+      return;
     }
+
+    finalizeTransaction(currentAction, otpCode);
+  };
+
+  const handleCloseOtpModal = () => {
+    setOtpModalOpen(false);
+    setOtpCode('');
+    setOtpError(null);
+    setGeneratedOtp(null);
+    setCurrentAction(null);
   };
 
   return (
@@ -145,8 +169,8 @@ const TransactionsPage = () => {
 
       {/* OTP Modal */}
       {otpModalOpen && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="card" style={{ width: '400px', maxWidth: '90%' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
             <h2>Verify Transaction</h2>
             <p className="text-muted">Please enter the 6-digit OTP sent to you.</p>
             <form onSubmit={handleVerifyAndSubmit} className="form-grid">
@@ -183,6 +207,7 @@ const TransactionsPage = () => {
                 onChange={(e) => setTransferForm({ ...transferForm, fromAccount: e.target.value })}
                 required
               >
+                <option value="" disabled>Select account</option>
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.account_number}>
                     {acc.account_number} ({acc.type}) — {formatCurrency(acc.balance, acc.currency)}
@@ -237,6 +262,7 @@ const TransactionsPage = () => {
                 onChange={(e) => setDepositForm({ ...depositForm, accountNumber: e.target.value })}
                 required
               >
+                <option value="" disabled>Select account</option>
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.account_number}>
                     {acc.account_number} ({acc.type}) — {formatCurrency(acc.balance, acc.currency)}
@@ -282,6 +308,7 @@ const TransactionsPage = () => {
                 onChange={(e) => setWithdrawForm({ ...withdrawForm, accountNumber: e.target.value })}
                 required
               >
+                <option value="" disabled>Select account</option>
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.account_number}>
                     {acc.account_number} ({acc.type}) — {formatCurrency(acc.balance, acc.currency)}
@@ -321,7 +348,8 @@ const TransactionsPage = () => {
           <div className="card" style={{ marginBottom: 24 }}>
             <label>
               Select account
-              <select value={selectedAccount} onChange={(event) => setSelectedAccount(event.target.value)}>
+              <select value={selectedAccount} onChange={(event) => setSelectedAccount(event.target.value)} required>
+                <option value="" disabled>Select account</option>
                 {accounts.map((account) => (
                   <option key={account.id} value={account.account_number}>
                     {account.account_number} ({account.type}) — {formatCurrency(account.balance, account.currency)}

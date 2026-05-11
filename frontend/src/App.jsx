@@ -8,6 +8,7 @@ import TransactionsPage from './pages/Transactions';
 import LoansPage from './pages/Loans';
 import ProfilePage from './pages/Profile';
 import AdminPage from './pages/Admin';
+import NotFoundPage from './pages/NotFound';
 
 const ProtectedRoute = ({ children }) => {
   const { token } = useAuth();
@@ -35,7 +36,11 @@ const Navbar = () => {
     <nav className="top-navbar">
       <Link to="/" className="brand">🏦 Banking System</Link>
       <div className="nav-menu">
-        <Link to="/" className={isActive('/')}>Dashboard</Link>
+        {user?.role === 'admin' ? (
+          <Link to="/admin" className={isActive('/admin')}>Admin Panel</Link>
+        ) : (
+          <Link to="/" className={isActive('/')}>Dashboard</Link>
+        )}
         {user?.role === 'customer' && (
           <>
             <Link to="/accounts" className={isActive('/accounts')}>Accounts</Link>
@@ -44,9 +49,6 @@ const Navbar = () => {
           </>
         )}
         <Link to="/profile" className={isActive('/profile')}>Profile</Link>
-        {user?.role === 'admin' && (
-          <Link to="/admin" className={isActive('/admin')}>Admin</Link>
-        )}
         <button type="button" className="secondary" onClick={logout}>
           Sign out
         </button>
@@ -56,7 +58,7 @@ const Navbar = () => {
 };
 
 function App() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   return (
     <div className="app-shell">
@@ -68,7 +70,7 @@ function App() {
           path="/"
           element={
             <ProtectedRoute>
-              <DashboardPage />
+              {user?.role === 'admin' ? <Navigate to="/admin" replace /> : <DashboardPage />}
             </ProtectedRoute>
           }
         />
@@ -112,7 +114,7 @@ function App() {
             </AdminRoute>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </div>
   );
